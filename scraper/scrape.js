@@ -67,7 +67,12 @@ directoryRequest = function(url,dir) {
                 if (link.endsWith('/')) {
                     console.log('Found directory: ' + item);
                     console.log('Located in url: ' + baseURL + link);
-                    addDirectoryRequest(baseURL+link,dir+item+'/');
+                    const dirURL = baseURL+link;
+                    if (url.includes(dirURL)) {
+                        console.log('Is parent directory, skipping')
+                    } else {
+                        addDirectoryRequest(dirURL, dir + item + '/');
+                    }
                 } else {
                     filesRequested ++;
                     console.log('Found document: ' + item);
