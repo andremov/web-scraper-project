@@ -16,8 +16,8 @@ let pendingFiles = [];
 let pendingDirectories = [];
 
 mainRequest = function(url, dir) {
-    addDirectoryRequest(url,dir);
-    nextDirectoryTimeout();
+    newDirectoryRequest(url, dir,'0');
+    callNextRequest();
 };
 
 reduceTimeout = function() {
@@ -28,122 +28,137 @@ increaseTimeout = function() {
     timeoutSteps = Math.min(timeoutSteps+1, maxTimeoutSteps)
 };
 
-nextDirectoryTimeout = function() {
-    setTimeout(requestPendingDirectory,getTimeoutDuration());
+addDirectoryRequest = function(requestObject) {
+    pendingDirectories[pendingDirectories.length] = requestObject;
 };
 
-nextFileTimeout = function() {
-    setTimeout(requestPendingFile,getTimeoutDuration());
+addFileRequest = function(requestObject) {
+    pendingFiles[pendingFiles.length] = requestObject;
+};
+
+newDirectoryRequest = function(fileURL, directoryName, uniqueID) {
+    pendingDirectories[pendingDirectories.length] = {
+        url: fileURL,
+        dir: directoryName,
+        attempts: 0,
+        id: uniqueID
+    };
+};
+
+newFileRequest = function(url, options, uniqueID) {
+    pendingFiles[pendingFiles.length] = {
+        file : url,
+        options,
+        attempts: 0,
+        id: uniqueID
+    };
+};
+
+callNextRequest = function() {
+  if (pendingDirectories.length > 0) {
+      setTimeout(requestPendingDirectory,getTimeoutDuration());
+  }  else {
+      if (pendingFiles.length > 0) {
+          setTimeout(requestPendingFile,getTimeoutDuration());
+      } else {
+          console.log('Should be done.');
+      }
+  }
 };
 
 getTimeoutDuration = function() {
-  return   Math.max((timeoutStepLength*timeoutSteps),minTimeoutDuration);
-};
-
-addDirectoryRequest = function(url,dir) {
-    pendingDirectories[pendingDirectories.length] = {
-        url,
-        dir
-    };
-};
-
-addFileRequest = function(url, options) {
-    pendingFiles[pendingFiles.length] = {
-        file : url,
-        options
-    };
-};
-
-directoryRequest = function(url,dir) {
-    console.log('Requesting directory '+url);
-    request(url, (error, response, html) => {
-        if (!error && response.statusCode === 200) {
-            reduceTimeout();
-            const $ = cheerio.load(html);
-            $('a').each((i, el) => {
-                const item = $(el).text();
-                const link = $(el).attr('href');
-                console.log('Found an item');
-                if (link.endsWith('/')) {
-                    console.log('Found directory: ' + item);
-                    console.log('Located in url: ' + baseURL + link);
-                    const dirURL = baseURL+link;
-                    if (url.includes(dirURL)) {
-                        console.log('Is parent directory, skipping')
-                    } else {
-                        addDirectoryRequest(dirURL, dir + item + '/');
-                    }
-                } else {
-                    filesRequested ++;
-                    console.log('Found document: ' + item);
-                    console.log('Located in url: ' + baseURL + link);
-                    addFileRequest(baseURL+link,{directory : dir, filename : item});
-                }
-            });
-        } else {
-            console.log('Error requesting directory, adding back to requests');
-            addDirectoryRequest(url,dir);
-            increaseTimeout();
-        }
-    });
-
-};
-
-fileRequest = function(file, options) {
-    console.log('Downloading file '+file);
-    download(file, options,function(e){
-        if (e) {
-            console.log('Error fetching file, adding back to requests');
-            addFileRequest(file,options);
-
-            increaseTimeout();
-        } else {
-            reduceTimeout();
-        }
-    });
+  return Math.max((timeoutStepLength*timeoutSteps),minTimeoutDuration);
 };
 
 requestPendingDirectory = function() {
     if (pendingDirectories.length > 0) {
-        const firstDirectory = pendingDirectories.shift();
-        const currentDirectoryURL = firstDirectory.url;
-        const currentDirectoryDir = firstDirectory.dir;
-        directoryRequest(currentDirectoryURL,currentDirectoryDir);
-
-        nextDirectoryTimeout();
+        directoryRequest(pendingDirectories.shift());
     } else {
-        nextFileTimeout();
+        console.log('Requesting directory failed, no pending directories')
     }
 };
 
 requestPendingFile = function() {
     if (pendingFiles.length > 0) {
-        const firstFile = pendingFiles.shift();
-        const currentFile = firstFile.file;
-        const currentOptions = firstFile.options;
-        fileRequest(currentFile,currentOptions);
-
-        nextFileTimeout();
+        fileRequest(pendingFiles.shift());
     } else {
-        console.log('Forcing recheck');
-
-        setTimeout(checkPending,timeoutStepLength*maxTimeoutSteps/2);
+        console.log('Requesting file failed, no pending files')
     }
 };
 
-checkPending = function() {
-    if (pendingDirectories.length > 0) {
-        nextDirectoryTimeout();
-    } else {
-        if (pendingFiles.length > 0) {
-            nextFileTimeout();
+directoryRequest = function(requestObject) {
+    const {url,id,dir,attempts} = requestObject;
+
+    console.log('[#'+id+'] - ['+attempts+'] Requesting directory '+url);
+
+    request(url, (error, response, html) => {
+        if (!error && response.statusCode === 200) {
+            reduceTimeout();
+            console.log('Request successful');
+
+            const $ = cheerio.load(html);
+
+            $('a').each((i, el) => {
+                console.log('Found an item');
+
+                const item = $(el).text();
+                const link = $(el).attr('href');
+                const targetURL = baseURL+link;
+                const itemID = id+'-'+i;
+
+                if (link.endsWith('/')) {
+                    console.log('Found directory: ' + item);
+                    console.log('Located in url: ' + baseURL + link);
+
+
+                    if (url.includes(targetURL)) {
+                        console.log('Is parent directory, skipping')
+                    } else {
+                        newDirectoryRequest(targetURL, (dir + item + '/'), itemID);
+                    }
+                } else {
+                    console.log('Found document: ' + item);
+                    console.log('Located in url: ' + baseURL + link);
+
+                    filesRequested ++;
+
+                    newFileRequest(targetURL,{directory : dir, filename : item}, itemID);
+                }
+            });
         } else {
-            console.log('Finished')
+            increaseTimeout();
+            console.log('Request failed');
+
+            requestObject.attempts = attempts+1;
+            addDirectoryRequest(requestObject);
         }
-    }
+
+        callNextRequest();
+    });
+
 };
 
+fileRequest = function(requestObject) {
+    const {file,options,id,attempts} = requestObject;
 
+    console.log('[#'+id+'] - ['+attempts+'] Downloading file '+file);
+
+    download(file, options,function(e){
+        if (e) {
+            console.log('Error fetching file, adding back to requests');
+            requestObject.attempts = attempts+1;
+            addFileRequest(requestObject);
+
+            increaseTimeout();
+        } else {
+            console.log('File fetch successful');
+
+            reduceTimeout();
+        }
+
+        callNextRequest();
+    });
+};
 
 mainRequest(baseURL + mainURL, './scraped-files/');
 
